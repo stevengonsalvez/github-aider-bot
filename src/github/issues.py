@@ -9,12 +9,12 @@ from github import Github
 from github.Issue import Issue
 from github.Repository import Repository
 
-from config import config
-from github.app import get_installation_client, get_repo_config
-from analysis.issue_analyzer import analyze_issue
-from aider.integration import run_aider_on_issue
-from git.operations import checkout_branch, commit_changes
-from github.pr import create_pull_request
+from src.config import config
+from src.github.app import get_installation_client, get_repo_config
+from src.analysis.issue_analyzer import analyze_issue
+from src.aider.integration import run_aider_on_issue
+from src.git.operations import checkout_branch, commit_changes
+from src.github.pr import create_pull_request
 
 # Configure logging
 logger = logging.getLogger(__name__)

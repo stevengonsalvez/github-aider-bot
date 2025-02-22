@@ -4,23 +4,36 @@ Main application module for the GitHub Aider Bot.
 import hmac
 import json
 import logging
+import sys
 from typing import Dict, Any, Optional
 
 import uvicorn
 from fastapi import FastAPI, Request, Response, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import config
-from github.app import get_installation_client
-from github.issues import process_issue_event
-from github.pr import create_pull_request
+from src.config import config
+from src.github.app import get_installation_client
+from src.github.issues import process_issue_event
+from src.github.pr import create_pull_request
 
-# Configure logging
+# Configure logging at the start of the file
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('aider-bot.log')
+    ]
 )
+
 logger = logging.getLogger(__name__)
+
+# Add startup logging
+logger.info("Starting Aider Bot server...")
+logger.info(f"Server config: host={config.server.host}, port={config.server.port}")
+logger.info(f"GitHub App ID: {config.github.app_id}")
+logger.info(f"Webhook secret configured: {bool(config.github.webhook_secret)}")
+logger.info(f"Private key file exists: {bool(config.github.private_key)}")
 
 # Create FastAPI application
 app = FastAPI(title="GitHub Aider Bot")
@@ -48,7 +61,7 @@ async def verify_webhook(request: Request) -> Optional[Dict[str, Any]]:
     Raises:
         HTTPException: If the webhook signature is invalid
     """
-    if not config.github.webhook_secret:
+    if not config.github.webhook_secret or config.github.webhook_secret == "":
         logger.warning("Webhook secret not configured, skipping verification")
         body = await request.body()
         return json.loads(body)
@@ -77,11 +90,20 @@ async def verify_webhook(request: Request) -> Optional[Dict[str, Any]]:
 
 @app.post("/webhook")
 async def webhook(
+    request: Request,
     background_tasks: BackgroundTasks,
     payload: Dict[str, Any] = Depends(verify_webhook),
 ):
     """Handle GitHub webhook events."""
+    logger.info("Received webhook event")
+    logger.info(f"Headers: {dict(request.headers)}")
+    logger.info(f"GitHub Event: {request.headers.get('X-GitHub-Event')}")
+    logger.info(f"GitHub Delivery: {request.headers.get('X-GitHub-Delivery')}")
+    
     event_type = payload.get("action")
+    logger.info(f"Event type: {event_type}")
+    logger.info(f"Payload: {json.dumps(payload, indent=2)}")
+    
     if not event_type:
         return {"status": "ignored", "reason": "No action specified"}
     
@@ -105,8 +127,8 @@ async def webhook(
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy"}
+    logger.info("Health check requested")
+    return {"status": "ok"}
 
 
 @app.get("/")
@@ -121,11 +143,12 @@ async def root():
 
 def main():
     """Run the server."""
+    import uvicorn
     uvicorn.run(
         "src.app:app",
         host=config.server.host,
         port=config.server.port,
-        reload=config.server.debug,
+        reload=False,  # Force disable reload to prevent double starts
     )
 
 

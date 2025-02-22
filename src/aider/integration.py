@@ -7,8 +7,9 @@ import subprocess
 import tempfile
 import json
 from typing import Dict, Any, List, Tuple, Optional
+import asyncio
 
-from config import config
+from src.config import config
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -103,6 +104,41 @@ def parse_aider_output(output: str) -> Tuple[Dict[str, str], str]:
         solution_description = output
     
     return changes, solution_description
+
+
+async def run_aider(input_file: str, files: List[str]) -> Tuple[int, str, str]:
+    """Run aider with the given input file and files to edit."""
+    cmd = [
+        config.aider.binary_path,
+        "--model", config.aider.model,
+        "--no-git",  # Don't use git features since we handle that
+        "--message-file", input_file,  # Use message-file instead of input-file
+        "--no-interactive",  # Run in non-interactive mode
+        *files  # Files to edit
+    ]
+
+    if config.aider.api_key:
+        cmd.extend(["--openai-api-key", config.aider.api_key])
+
+    logger.info(f"Running aider command: {' '.join(cmd)}")
+    
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        stdout, stderr = await process.communicate()
+        
+        return (
+            process.returncode,
+            stdout.decode() if stdout else "",
+            stderr.decode() if stderr else ""
+        )
+    except Exception as e:
+        logger.exception("Failed to run aider")
+        return 1, "", str(e)
 
 
 def run_aider_on_issue(

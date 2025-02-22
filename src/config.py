@@ -21,7 +21,7 @@ class ServerConfig(BaseModel):
 
 class GitHubConfig(BaseModel):
     """GitHub App configuration."""
-    app_id: int = Field(default=int(os.getenv("GITHUB_APP_ID", "0")))
+    app_id: int = Field(default=int(os.getenv("GITHUB_APP_ID", "0") or "0"))
     private_key_path: str = Field(default=os.getenv("GITHUB_PRIVATE_KEY_PATH", ""))
     webhook_secret: str = Field(default=os.getenv("GITHUB_WEBHOOK_SECRET", ""))
     app_name: str = Field(default=os.getenv("GITHUB_APP_NAME", "aider-bot"))
@@ -29,18 +29,22 @@ class GitHubConfig(BaseModel):
     @property
     def private_key(self) -> str:
         """Read the private key from the file."""
+        if not self.private_key_path:
+            return ""
+            
         try:
             with open(self.private_key_path, "r") as key_file:
                 return key_file.read()
         except Exception as e:
-            raise ValueError(f"Failed to read private key: {e}")
+            print(f"Warning: Failed to read private key: {e}")
+            return ""
 
 
 class AiderConfig(BaseModel):
-    """Aider configuration."""
-    binary_path: str = Field(default=os.getenv("AIDER_BINARY_PATH", "aider"))
-    model: str = Field(default=os.getenv("AIDER_MODEL", "gpt-4-turbo"))
-    api_key: str = Field(default=os.getenv("AIDER_API_KEY", ""))
+    """Configuration for Aider integration."""
+    binary_path: str = "aider"
+    model: str = "gpt-4-turbo-preview"  # Updated to latest model
+    api_key: Optional[str] = None
 
 
 class RepoConfig(BaseModel):

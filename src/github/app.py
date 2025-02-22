@@ -1,16 +1,16 @@
 """
 GitHub App integration module.
 """
+import jwt
 import time
 import logging
 from typing import Optional, Dict, Any
 
-import jwt
 import requests
-from github import Github
+from github import Github as PyGithub
 from github.GithubIntegration import GithubIntegration
 
-from config import config
+from src.config import config
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -23,6 +23,10 @@ def create_jwt() -> str:
     Returns:
         JWT token string
     """
+    if not config.github.app_id or not config.github.private_key:
+        logger.warning("Missing GitHub App credentials, cannot create JWT")
+        return ""
+        
     now = int(time.time())
     payload = {
         "iat": now,
@@ -85,7 +89,7 @@ def get_installation_token(installation_id: int) -> Optional[str]:
         return None
 
 
-def get_installation_client(owner: str, repo: str) -> Optional[Github]:
+def get_installation_client(owner: str, repo: str) -> Optional[PyGithub]:
     """
     Get a GitHub client for a repository installation.
     
@@ -104,10 +108,10 @@ def get_installation_client(owner: str, repo: str) -> Optional[Github]:
     if not token:
         return None
     
-    return Github(token)
+    return PyGithub(token)
 
 
-def get_repo_config(owner: str, repo: str, client: Optional[Github] = None) -> Dict[str, Any]:
+def get_repo_config(owner: str, repo: str, client: Optional[PyGithub] = None) -> Dict[str, Any]:
     """
     Get repository configuration from .github/aider-bot.yml.
     
