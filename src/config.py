@@ -7,9 +7,12 @@ from typing import Optional, Dict, List, Any
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+import logging
 
 # Load environment variables from .env file
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class ServerConfig(BaseModel):
@@ -30,21 +33,24 @@ class GitHubConfig(BaseModel):
     def private_key(self) -> str:
         """Read the private key from the file."""
         if not self.private_key_path:
+            logger.error("No private key path configured")
             return ""
             
         try:
             with open(self.private_key_path, "r") as key_file:
-                return key_file.read()
+                key = key_file.read().strip()
+                logger.debug(f"Read private key (length: {len(key)})")
+                return key
         except Exception as e:
-            print(f"Warning: Failed to read private key: {e}")
+            logger.error(f"Failed to read private key: {e}")
             return ""
 
 
 class AiderConfig(BaseModel):
     """Configuration for Aider integration."""
-    binary_path: str = "aider"
-    model: str = "gpt-4-turbo-preview"  # Updated to latest model
-    api_key: Optional[str] = None
+    binary_path: str = Field(default=os.getenv("AIDER_BINARY_PATH", "aider"))
+    model: str = Field(default=os.getenv("AIDER_MODEL", "gpt-4-turbo-preview"))
+    api_key: Optional[str] = Field(default=os.getenv("OPENAI_API_KEY") or os.getenv("AIDER_API_KEY"))
 
 
 class RepoConfig(BaseModel):

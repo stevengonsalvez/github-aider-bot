@@ -1,9 +1,30 @@
-fastapi>=0.95.0
-uvicorn>=0.22.0
-PyGithub>=2.0.0
-pydantic>=2.0.0
-gitpython>=3.1.30
+# GitHub API
+PyGithub>=2.1.1
+gidgethub>=5.3.0
+aiohttp>=3.9.0
+requests>=2.28.2  # For synchronous HTTP requests
+gitpython>=3.1.30  # For git operations
+
+# JWT for GitHub App auth
+PyJWT>=2.8.0
+cryptography>=41.0.0  # Required for JWT RS256
+
+# YAML parsing
+PyYAML>=6.0.1
+
+# Web framework
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.0.0  # For data validation
+
+# Environment variables
 python-dotenv>=1.0.0
-requests>=2.28.2
-cryptography>=40.0.0
-aider-chat==0.74.2
+
+# OpenAI integration
+openai>=1.3.0
+
+# Aider integration
+aider-chat==0.74.2  # Pin to specific version for stability
+
+# Utilities
+typing-extensions>=4.8.0

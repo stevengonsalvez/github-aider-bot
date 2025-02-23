@@ -3,11 +3,15 @@ GitHub issues handling module.
 """
 import logging
 import re
+import os
+import tempfile
 from typing import Dict, Any, List, Tuple, Optional
 
 from github import Github
 from github.Issue import Issue
 from github.Repository import Repository
+from gidgethub.aiohttp import GitHubAPI
+from git import Repo
 
 from src.config import config
 from src.github.app import get_installation_client, get_repo_config
@@ -90,13 +94,8 @@ def extract_issue_details(
     return True, issue_details
 
 
-def process_issue_event(payload: Dict[str, Any]) -> None:
-    """
-    Process an issue event from GitHub.
-    
-    Args:
-        payload: Webhook payload
-    """
+async def process_issue_event(payload: Dict[str, Any]):
+    """Process an issue event."""
     try:
         # Extract repository and issue information
         repo_name = payload["repository"]["full_name"]
@@ -105,131 +104,119 @@ def process_issue_event(payload: Dict[str, Any]) -> None:
         
         logger.info(f"Processing issue #{issue_number} from {repo_name}")
         
-        # Get GitHub client for the installation
-        client = get_installation_client(owner, repo)
-        if not client:
+        # Get GitHub client and token for the installation
+        gh, access_token = await get_installation_client(owner, repo)
+        if not gh or not access_token:
             logger.error(f"Failed to get GitHub client for {repo_name}")
             return
-        
+            
         # Get repository and issue objects
-        repository = client.get_repo(repo_name)
+        repository = gh.get_repo(repo_name)
         issue = repository.get_issue(issue_number)
         
-        # Get repository configuration
-        repo_config = get_repo_config(owner, repo, client)
-        
-        # Check if we should process this issue
-        should_process, issue_details = extract_issue_details(issue, repo_config)
-        if not should_process:
-            logger.info(f"Skipping issue #{issue_number}")
-            return
-        
-        # Add a comment that we're working on it
-        comment = issue.create_comment(
-            f"🤖 I'm analyzing this issue to see if I can help fix it automatically. I'll update you shortly."
-        )
-        
-        # Create a branch name based on the issue
-        branch_name = f"fix/issue-{issue_number}"
-        safe_branch_name = re.sub(r'[^a-zA-Z0-9/_-]', '-', branch_name)
-        
-        # Run the fix workflow
-        fix_issue(
-            repository=repository,
-            issue=issue,
-            issue_details=issue_details,
-            branch_name=safe_branch_name,
-            repo_config=repo_config,
-        )
-    
-    except Exception as e:
-        logger.exception(f"Error processing issue event: {e}")
+        # Create a temporary directory for the repository
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logger.info(f"Cloning repository to {temp_dir}")
+            
+            # Get the clone URL with auth token
+            clone_url = repository.clone_url.replace(
+                "https://",
+                f"https://x-access-token:{access_token}@"
+            )
+            
+            logger.debug(f"Using clone URL (redacted): {clone_url.replace(access_token, 'TOKEN')}")
+            
+            # Clone the repository
+            repo = Repo.clone_from(
+                clone_url,
+                temp_dir,
+                branch=repository.default_branch
+            )
+            
+            logger.info(f"Successfully cloned repository to {temp_dir}")
+            
+            # Extract file paths from issue body
+            file_paths = []
+            if "package.json" in payload["issue"]["body"].lower():
+                file_paths.append("package.json")
+            
+            # Add issue details with file paths
+            issue_details = {
+                **payload["issue"],
+                "file_paths": file_paths or ["package.json"]  # Default to package.json if no files found
+            }
+            
+            # Add a comment that we're working on it
+            issue.create_comment(
+                "🤖 I'm analyzing this issue to see if I can help fix it automatically. I'll update you shortly."
+            )
+            
+            # Run Aider on the issue
+            success, changes, solution_description = await run_aider_on_issue(
+                repo_path=temp_dir,
+                issue_details=issue_details,
+                repo_config={}
+            )
 
+            if success and changes:
+                # Create a branch name from issue
+                branch_name = f"fix/issue-{issue_number}"
+                base_branch = repository.default_branch
+                
+                # Create branch from default branch
+                base_ref = repository.get_git_ref(f"heads/{base_branch}")
+                repository.create_git_ref(
+                    ref=f"refs/heads/{branch_name}",
+                    sha=base_ref.object.sha
+                )
+                
+                # Create/update the files
+                for file_path, content in changes.items():
+                    try:
+                        # Try to get existing file
+                        file = repository.get_contents(file_path, ref=branch_name)
+                        repository.update_file(
+                            file_path,
+                            f"Update {file_path} for issue #{issue_number}",
+                            content,
+                            file.sha,
+                            branch=branch_name
+                        )
+                    except:
+                        # File doesn't exist, create it
+                        repository.create_file(
+                            file_path,
+                            f"Create {file_path} for issue #{issue_number}",
+                            content,
+                            branch=branch_name
+                        )
+                
+                # Create the pull request
+                pr = repository.create_pull(
+                    title=f"Fix #{issue_number}: {payload['issue']['title']}",
+                    body=solution_description,
+                    head=branch_name,
+                    base=base_branch
+                )
+                
+                # Add comment to issue
+                issue.create_comment(
+                    f"I've created PR #{pr.number} with a fix for this issue.\n\n{solution_description}"
+                )
+                
+            else:
+                # Add comment that no changes were made
+                issue.create_comment(
+                    "I analyzed the issue but couldn't automatically fix it. A human review may be needed."
+                )
 
-def fix_issue(
-    repository: Repository,
-    issue: Issue,
-    issue_details: Dict[str, Any],
-    branch_name: str,
-    repo_config: Dict[str, Any],
-) -> None:
-    """
-    Fix an issue using Aider.
-    
-    Args:
-        repository: GitHub repository
-        issue: GitHub issue
-        issue_details: Extracted issue details
-        branch_name: Branch name to create
-        repo_config: Repository configuration
-    """
-    try:
-        # Notify that we're attempting a fix
-        issue.create_comment(
-            f"🔍 I'm attempting to fix this issue. I'll create a branch `{branch_name}` and open a PR if successful."
-        )
-        
-        # Clone the repository and checkout a new branch
-        repo_path = checkout_branch(repository.clone_url, branch_name)
-        if not repo_path:
-            issue.create_comment(
-                "❌ Failed to checkout a new branch. Unable to proceed with automated fix."
-            )
-            return
-        
-        # Run Aider on the issue
-        success, changes = run_aider_on_issue(
-            repo_path=repo_path,
-            issue_details=issue_details,
-            repo_config=repo_config,
-        )
-        
-        if not success or not changes:
-            issue.create_comment(
-                "❌ I was unable to automatically fix this issue. A human developer will need to take a look."
-            )
-            return
-        
-        # Commit the changes
-        commit_result = commit_changes(
-            repo_path=repo_path,
-            branch_name=branch_name,
-            commit_message=f"Fix issue #{issue_details['number']}: {issue_details['title']}",
-            changes=changes,
-        )
-        
-        if not commit_result:
-            issue.create_comment(
-                "❌ Failed to commit changes. Unable to proceed with automated fix."
-            )
-            return
-        
-        # Create a pull request
-        pr_url = create_pull_request(
-            repository=repository,
-            branch_name=branch_name,
-            issue_number=issue_details["number"],
-            title=f"Fix issue #{issue_details['number']}: {issue_details['title']}",
-            body=f"This PR was automatically generated to fix issue #{issue_details['number']}.\n\n{issue_details.get('solution_description', '')}",
-            repo_config=repo_config,
-        )
-        
-        if not pr_url:
-            issue.create_comment(
-                "❌ Failed to create a pull request. Changes have been committed to the branch `{branch_name}`."
-            )
-            return
-        
-        # Update the issue with the PR link
-        issue.create_comment(
-            f"✅ I've created a pull request with a potential fix: {pr_url}\n\n"
-            f"Please review the changes and provide feedback. If the fix looks good, "
-            f"you can merge the PR to resolve this issue."
-        )
-        
     except Exception as e:
-        logger.exception(f"Error fixing issue: {e}")
-        issue.create_comment(
-            f"❌ An error occurred while trying to fix this issue: {str(e)}\n\n"
-            f"A human developer will need to take a look."
-        )
+        logger.exception(f"Error processing issue: {e}")
+        # Add error comment to issue
+        try:
+            issue = repository.get_issue(issue_number)
+            issue.create_comment(
+                f"Sorry, I encountered an error while trying to fix this issue:\n```\n{str(e)}\n```"
+            )
+        except Exception as comment_error:
+            logger.exception("Failed to post error comment", exc_info=comment_error)
